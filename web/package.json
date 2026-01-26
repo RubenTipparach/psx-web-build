@@ -1,0 +1,10 @@
+{
+  "name": "lander-baremetal",
+  "version": "1.0.0",
+  "scripts": {
+    "serve": "serve -s . -l 3000"
+  },
+  "devDependencies": {
+    "serve": "^14.0.0"
+  }
+}

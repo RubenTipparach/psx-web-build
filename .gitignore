@@ -1,0 +1,26 @@
+# Build output
+build/
+
+# Python virtual environment
+sdk/env/
+
+# Node modules
+web/node_modules/
+
+# ROM files (generated)
+web/rom/
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# CMake
+CMakeUserPresets.json
+.history/

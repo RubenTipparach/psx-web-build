@@ -1,0 +1,51 @@
+<DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PSX Lander - Bare Metal</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            background: #1a1a2e;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            color: #eee;
+        }
+        h1 { color: #00d4ff; margin-bottom: 10px; }
+        #game {
+            width: 800px;
+            height: 600px;
+            max-width: 100%;
+        }
+        .info {
+            margin-top: 15px;
+            color: #888;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <h1>PSX Lander - Bare Metal</h1>
+    <div id="game"></div>
+    <p class="info">Built with ps1-bare-metal SDK - Using EmulatorJS HLE BIOS</p>
+    <script>
+        window.EJS_player = '#game';
+        window.EJS_core = 'psx';
+        window.EJS_gameUrl = 'rom/lander.exe?v=' + Date.now();
+        window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
+        window.EJS_startOnLoaded = true;
+        window.EJS_paths = {
+            'shaders.js': 'http://localhost:3000/data/shaders.js'
+        };
+        window.EJS_defaultOptions = {
+            'shader': 'ntsc-blastem.glslp'
+        };
+    </script>
+    <script src="https://cdn.emulatorjs.org/stable/data/loader.js"></script>
+</body>
+</html>
