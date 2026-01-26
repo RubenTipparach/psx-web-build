@@ -34,6 +34,7 @@ target_include_directories(
 	${SDK_PATH}/src
 	${SDK_PATH}/src/libc
 	${CMAKE_CURRENT_SOURCE_DIR}
+	${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 link_libraries(common)
 
@@ -46,9 +47,9 @@ convertImage(
 # Build the lander executable
 addPS1Executable(
 	lander
-	gpu.c
-	main.c
-	trig.c
+	src/gpu.c
+	src/main.c
+	src/trig.c
 )
 
 # Embed texture data into executable

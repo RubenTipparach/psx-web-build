@@ -4,7 +4,20 @@
       "WebFetch(domain:github.com)",
       "Bash(echo:*)",
       "Bash(git submodule add:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "WebFetch(domain:emulatorjs.org)",
+      "WebFetch(domain:cdn.emulatorjs.org)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(curl:*)",
+      "Bash(node -c:*)",
+      "Bash(ls:*)",
+      "Bash(powershell -Command \"\\(Get-Content ''c:\\\\Users\\\\santi\\\\repos\\\\psx-web-build\\\\web\\\\data\\\\shaders.js'' | Select-Object -Last 10\\)\")",
+      "Bash(powershell -Command \"\\(Get-Content ''c:\\\\Users\\\\santi\\\\repos\\\\psx-web-build\\\\web\\\\data\\\\shaders.js'' | Select-Object -Last 5\\)\")",
+      "Bash(powershell -Command \"Get-Content ''c:\\\\Users\\\\santi\\\\repos\\\\psx-web-build\\\\web\\\\data\\\\shaders.js'' | Select-String -Pattern ''ntsc|NTSC'' -Context 0,1\")",
+      "Bash(powershell -Command \"Get-Content ''c:\\\\Users\\\\santi\\\\repos\\\\psx-web-build\\\\web\\\\data\\\\shaders.js'' | Select-String -Pattern ''tiny'' -Context 0,1\")",
+      "Bash(powershell -Command \"[Convert]::ToBase64String\\([System.IO.File]::ReadAllBytes\\(''c:\\\\Users\\\\santi\\\\repos\\\\psx-web-build\\\\web\\\\data\\\\ntsc-simple-2.glsl''\\)\\)\")",
+      "Bash(./build.bat)"
     ]
   }
 }
