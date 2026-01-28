@@ -50,22 +50,28 @@
     <p id="gamepad-status" class="info" style="color: #ff6b6b;">Gamepad: Not detected - Press any button on your controller</p>
     <script>
         window.EJS_player = '#game';
-        window.EJS_core = 'psx';  // pcsx_rearmed with HLE BIOS
-        // Load bin directly - XA audio is embedded in data track
-        window.EJS_gameUrl = 'rom/lander.bin?v=' + Date.now();
+        window.EJS_core = 'pcsx_rearmed';  // Explicitly use pcsx_rearmed core
+        // Load zip file (contains bin + cue for CD-DA audio support)
+        window.EJS_gameUrl = 'rom/lander.zip?v=' + Date.now();
         window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
         window.EJS_startOnLoaded = true;
-        // Use OpenBIOS for better hardware compatibility (vs HLE BIOS)
-        window.EJS_biosUrl = 'bios/openbios.bin';
+        // Provide OpenBIOS
+        // window.EJS_biosUrl = 'bios/scph_openbios.bin';
         window.EJS_DEBUG_XX = true;
         window.EJS_debug = true;  // Enable core debug logging
         window.EJS_Logging = true;  // Enable logging
         window.EJS_volume = 1.0;  // Enable sound at full volume
 
+        // pcsx_rearmed SPU options to reduce glitching
+        window.EJS_defaultOptions = {
+            'pcsx_rearmed_spu_interpolation': 'gaussian',
+            'pcsx_rearmed_nothreads': 'enabled'  // Disable threaded SPU - may help sync
+        };
+
         // Map analog left stick to D-pad (swap value2 between indices 4-7 and 16-19)
         window.EJS_defaultControls = {
             0: {
-                0: { 'value': 'x', 'value2': 'BUTTON_2' },
+                0: { 'value': 'x', 'value2': 'BUTTON_1' },
                 1: { 'value': 's', 'value2': 'BUTTON_4' },
                 2: { 'value': 'v', 'value2': 'SELECT' },
                 3: { 'value': 'enter', 'value2': 'START' },
@@ -73,7 +79,7 @@
                 5: { 'value': 'down arrow', 'value2': 'LEFT_STICK_Y:+1' },  // D-pad Down = Analog Down
                 6: { 'value': 'left arrow', 'value2': 'LEFT_STICK_X:-1' },  // D-pad Left = Analog Left
                 7: { 'value': 'right arrow', 'value2': 'LEFT_STICK_X:+1' }, // D-pad Right = Analog Right
-                8: { 'value': 'z', 'value2': 'BUTTON_1' },
+                8: { 'value': 'z', 'value2': 'BUTTON_2' },
                 9: { 'value': 'a', 'value2': 'BUTTON_3' },
                 10: { 'value': 'q', 'value2': 'LEFT_TOP_SHOULDER' },
                 11: { 'value': 'e', 'value2': 'RIGHT_TOP_SHOULDER' },

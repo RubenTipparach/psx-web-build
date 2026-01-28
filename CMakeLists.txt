@@ -54,18 +54,16 @@ convertImage(
 	lander/fontPalette.dat
 )
 
-# Convert music WAV to SPU-ADPCM format for embedding
-# Using 22050 Hz mono - short loop to fit in executable RAM
-# -L sets loop end flag so SPU loops back to start address
+# Convert sound effect WAV to SPU-ADPCM format for embedding (bite sound)
+# Using 22050 Hz mono for better quality on short sound effects
 add_custom_command(
 	OUTPUT "${PROJECT_BINARY_DIR}/lander/musicData.spu"
-	DEPENDS "${PROJECT_SOURCE_DIR}/assets/guitar_10s.wav"
+	DEPENDS "${PROJECT_SOURCE_DIR}/assets/bite1.wav"
 	COMMAND
 		"${PSXAVENC_PATH}"
 		"-t" "spu"
 		"-f" "22050"
-		"-L"
-		"${PROJECT_SOURCE_DIR}/assets/guitar_10s.wav"
+		"${PROJECT_SOURCE_DIR}/assets/bite1.wav"
 		"${PROJECT_BINARY_DIR}/lander/musicData.spu"
 	VERBATIM
 )
@@ -90,6 +88,7 @@ addPS1Executable(
 	src/bios.c
 	src/model.c
 	src/font.c
+	src/cdda.c
 	src/main.c
 	src/trig.c
 )

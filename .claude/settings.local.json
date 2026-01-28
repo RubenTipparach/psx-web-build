@@ -69,7 +69,10 @@
       "Bash(\"/c/Users/santi/repos/psx-web-build/web/rom/PSX Snake Alpha Source Code and Assets/Source Code and Assets/Source Code/mkpsxiso/mkpsxiso.exe\" --version)",
       "Bash(git submodule:*)",
       "Bash(git rm:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(c:/Users/santi/repos/psx-web-build/sdk/env/Scripts/pip.exe install:*)",
+      "Bash(tasklist:*)",
+      "Bash(cmd.exe /c \"cd /d c:\\\\Users\\\\santi\\\\repos\\\\psx-web-build && build.bat\")"
     ]
   }
 }

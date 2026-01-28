@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Build a PSX disc image (.bin/.cue) from the compiled executable.
-Audio is embedded in executable via SPU-ADPCM (handled by CMake build).
+Includes CD-DA audio track for music and SPU for sound effects.
 Requires: mkpsxiso
 """
 
@@ -14,10 +14,11 @@ PROJECT_ROOT = Path(__file__).parent.parent
 BUILD_DIR = PROJECT_ROOT / "build"
 OUTPUT_DIR = PROJECT_ROOT / "web" / "rom"
 TOOLS_DIR = PROJECT_ROOT / "tools"
+ASSETS_DIR = PROJECT_ROOT / "assets"
 
-def create_iso_xml():
-    """Create XML for disc (SPU audio is embedded in EXE)."""
-    return '''<?xml version="1.0" encoding="UTF-8"?>
+def create_iso_xml(has_audio=False):
+    """Create XML for disc with optional CD-DA audio track."""
+    xml = '''<?xml version="1.0" encoding="UTF-8"?>
 
 <iso_project image_name="lander.bin" cue_sheet="lander.cue">
 \t<track type="data">
@@ -26,8 +27,13 @@ def create_iso_xml():
 \t\t\t<file name="LANDER.EXE" source="lander.psexe"/>
 \t\t</directory_tree>
 \t</track>
-</iso_project>
 '''
+    if has_audio:
+        xml += '''\t<track type="audio" source="music.wav"/>
+'''
+    xml += '''</iso_project>
+'''
+    return xml
 
 def create_system_cnf():
     """Create SYSTEM.CNF boot configuration."""
@@ -70,12 +76,22 @@ def main():
     exe_size = exe_path.stat().st_size / 1024
     print(f"Executable size: {exe_size:.1f} KB")
 
+    # Check for CD-DA music file (SefChol - Take it Slow for testing)
+    music_file = ASSETS_DIR / "sefchol_take_it_slow.wav"
+    has_audio = music_file.exists()
+    if has_audio:
+        shutil.copy(music_file, work_dir / "music.wav")
+        music_size = music_file.stat().st_size / (1024 * 1024)
+        print(f"CD-DA music: {music_size:.1f} MB (SefChol - Take it Slow)")
+    else:
+        print("No CD-DA music (sefchol_take_it_slow.wav not found)")
+
     # Create SYSTEM.CNF
     (work_dir / "system.cnf").write_text(create_system_cnf())
 
     # Create ISO XML config
     xml_path = work_dir / "iso.xml"
-    xml_path.write_text(create_iso_xml())
+    xml_path.write_text(create_iso_xml(has_audio))
 
     # Run mkpsxiso
     print("Building disc image...")

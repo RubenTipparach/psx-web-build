@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include "gpu.h"
 #include "spu.h"
+#include "cdda.h"
 #include "bios.h"
 #include "model.h"
 #include "font.h"
@@ -70,6 +71,68 @@ extern const uint32_t musicData_size;
 /* Screen center position */
 #define CENTERX (SCREEN_WIDTH  / 2)
 #define CENTERY (SCREEN_HEIGHT / 2)
+
+/* Starfield configuration - scrolling right to left */
+#define NUM_STARS 120
+
+/* Star structure - 2D scrolling with parallax layers */
+typedef struct {
+	int16_t x, y;
+	uint8_t brightness;
+	uint8_t speed;
+	uint8_t size;
+} Star;
+
+/* Global starfield */
+static Star stars[NUM_STARS];
+
+/* Simple pseudo-random number generator */
+static uint32_t randSeed = 12345;
+static uint32_t fastRand(void) {
+	randSeed = randSeed * 1103515245 + 12345;
+	return (randSeed >> 16) & 0x7FFF;
+}
+
+/* Initialize a single star at right edge */
+static void resetStar(Star *star, bool randomX) {
+	star->x = randomX ? (int16_t)(fastRand() % SCREEN_WIDTH) : SCREEN_WIDTH + (fastRand() % 20);
+	star->y = (int16_t)(fastRand() % SCREEN_HEIGHT);
+	/* Create parallax effect - 3 layers */
+	int layer = fastRand() % 3;
+	if (layer == 0) {
+		/* Far layer - dim and slow */
+		star->brightness = 60 + (fastRand() % 40);
+		star->speed = 1;
+		star->size = 1;
+	} else if (layer == 1) {
+		/* Mid layer */
+		star->brightness = 120 + (fastRand() % 60);
+		star->speed = 2;
+		star->size = 1;
+	} else {
+		/* Near layer - bright and fast */
+		star->brightness = 200 + (fastRand() % 55);
+		star->speed = 3 + (fastRand() % 2);
+		star->size = 2;
+	}
+}
+
+/* Initialize starfield with random positions */
+static void initStarfield(void) {
+	for (int i = 0; i < NUM_STARS; i++) {
+		resetStar(&stars[i], true);
+	}
+}
+
+/* Update starfield - move stars right to left */
+static void updateStarfield(void) {
+	for (int i = 0; i < NUM_STARS; i++) {
+		stars[i].x -= stars[i].speed;
+		if (stars[i].x < -2) {
+			resetStar(&stars[i], false);
+		}
+	}
+}
 
 /* Initialize the GTE for 3D rendering */
 static void setupGTE(int width, int height) {
@@ -246,13 +309,13 @@ static void pollController(int port, ControllerState *state) {
 	/* Send address byte (0x01 = controller) */
 	SIO_DATA(0) = 0x01;
 
-	if (!waitForAcknowledge(120)) {
+	if (!waitForAcknowledge(500)) {
 		SIO_CTRL(0) &= ~SIO_CTRL_DTR;
 		return;  /* No controller */
 	}
 
 	/* Clear receive buffer with timeout */
-	int clearTimeout = 1000;
+	int clearTimeout = 2000;
 	while ((SIO_STAT(0) & SIO_STAT_RX_NOT_EMPTY) && clearTimeout-- > 0)
 		SIO_DATA(0);
 
@@ -261,8 +324,8 @@ static void pollController(int port, ControllerState *state) {
 	uint8_t request[] = { 0x42, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
 	/* First byte tells us the controller type and response length */
-	response[0] = exchangeByteWithTimeout(request[0], 10000);
-	if (!waitForAcknowledge(120)) goto done;
+	response[0] = exchangeByteWithTimeout(request[0], 20000);
+	if (!waitForAcknowledge(500)) goto done;
 
 	/* Get controller type from upper nibble, length from lower nibble */
 	int type = response[0] >> 4;
@@ -272,8 +335,8 @@ static void pollController(int port, ControllerState *state) {
 
 	/* Read remaining bytes */
 	for (int i = 1; i < responseLen; i++) {
-		response[i] = exchangeByteWithTimeout(request[i], 10000);
-		if (i < responseLen - 1 && !waitForAcknowledge(120))
+		response[i] = exchangeByteWithTimeout(request[i], 20000);
+		if (i < responseLen - 1 && !waitForAcknowledge(500))
 			break;
 	}
 
@@ -367,13 +430,21 @@ int main(int argc, const char **argv) {
 	biosInit();
 	puts("BIOS events initialized");
 
-	/* Upload and play music (SPU-ADPCM format) */
+	/* Upload SPU sound effect (guitar) - triggered by button press */
+	uint32_t spuSoundAddr = 0;
 	if (musicData_size > 0) {
-		uint32_t musicAddr = uploadVAG(musicData, musicData_size);
-		spuUnmute();  /* Unmute after upload (psyqo order) */
-		playSample(0, musicAddr, 22050, 0x3FFF);  /* Channel 0, 22kHz, max volume */
-		puts("Music started on SPU");
+		spuSoundAddr = uploadVAG(musicData, musicData_size);
+		printf("SPU: Sound uploaded to 0x%05lX\n", (unsigned long)spuSoundAddr);
 	}
+
+	/* Initialize CD-DA for background music */
+	/* NOTE: Do this BEFORE spuUnmute() since initCDDA() touches SPU_CTRL */
+	initCDDA();
+	puts("CD-DA initialized - music playing from disc");
+
+	/* Unmute SPU AFTER CD-DA init (CD-DA init modifies SPU_CTRL) */
+	spuUnmute();
+	puts("SPU unmuted - press X for sound effect");
 
 	/* Double buffering */
 	DMAChain dmaChains[2];
@@ -387,6 +458,17 @@ int main(int argc, const char **argv) {
 	puts("Lander model viewer starting...");
 	puts("Use D-pad or left stick to rotate");
 	puts("Use L1/R1 or right stick for roll");
+	puts("Press X button to play sound effect");
+
+	/* Track previous button state for edge detection */
+	uint16_t prevButtons = 0;
+
+	/* Initialize starfield */
+	initStarfield();
+	puts("Starfield initialized");
+
+	/* Background flash effect (0 = purple, 255 = yellow) */
+	int bgFlash = 0;
 
 	/* Main loop */
 	for (;;) {
@@ -444,6 +526,27 @@ int main(int argc, const char **argv) {
 			rotationRoll -= ROTATION_SPEED;
 		if (pad.buttons & PAD_R1)
 			rotationRoll += ROTATION_SPEED;
+
+		/* X button triggers SPU sound effect and flash (edge detection - only on press) */
+		if ((pad.buttons & PAD_X) && !(prevButtons & PAD_X)) {
+			if (spuSoundAddr != 0) {
+				playSample(0, spuSoundAddr, 22050, 0x3FFF);
+			}
+			bgFlash = 255;  /* Trigger yellow flash */
+		}
+		prevButtons = pad.buttons;
+
+		/* Fade flash back to purple */
+		if (bgFlash > 0) {
+			bgFlash -= 12;
+			if (bgFlash < 0) bgFlash = 0;
+		}
+
+		/* Update starfield animation */
+		updateStarfield();
+
+		/* Update CD-DA looping */
+		updateCDDA();
 
 		/* Reset GTE translation vector and rotation matrix */
 		gte_setControlReg(GTE_TRX,    0);
@@ -525,6 +628,22 @@ int main(int argc, const char **argv) {
 			sprintf(hudText, "DPAD: %s", dpadDir);
 			printString(chain, &font, 8, 20, hudText);
 
+			/* Face buttons display */
+			sprintf(hudText, "BTN: %s%s%s%s",
+				(pad.buttons & PAD_X) ? "X " : "",
+				(pad.buttons & PAD_CIRCLE) ? "O " : "",
+				(pad.buttons & PAD_SQUARE) ? "[] " : "",
+				(pad.buttons & PAD_TRIANGLE) ? "/\\ " : "");
+			printString(chain, &font, 8, 32, hudText);
+
+			/* Shoulder buttons */
+			sprintf(hudText, "SH: %s%s%s%s",
+				(pad.buttons & PAD_L1) ? "L1 " : "",
+				(pad.buttons & PAD_R1) ? "R1 " : "",
+				(pad.buttons & PAD_L2) ? "L2 " : "",
+				(pad.buttons & PAD_R2) ? "R2 " : "");
+			printString(chain, &font, 8, 44, hudText);
+
 			/* Left analog stick values */
 			sprintf(hudText, "L: X=%3d Y=%3d", pad.leftX, pad.leftY);
 			printString(chain, &font, 8, SCREEN_HEIGHT - 30, hudText);
@@ -534,11 +653,49 @@ int main(int argc, const char **argv) {
 			printString(chain, &font, 8, SCREEN_HEIGHT - 18, hudText);
 		}
 
-		/* Clear background (at the back of ordering table) */
-		ptr    = allocatePacket(chain, ORDERING_TABLE_SIZE - 1, 3);
-		ptr[0] = gp0_rgb(60, 120, 150) | gp0_vramFill();
-		ptr[1] = gp0_xy(bufferX, bufferY);
-		ptr[2] = gp0_xy(SCREEN_WIDTH, SCREEN_HEIGHT);
+		/* Calculate gradient colors based on flash state */
+		/* Top: deep purple, Bottom: dark blue/black */
+		/* Flash shifts toward yellow/orange */
+		int topR = 60 + ((255 - 60) * bgFlash) / 255;
+		int topG = 20 + ((220 - 20) * bgFlash) / 255;
+		int topB = 90 + ((80 - 90) * bgFlash) / 255;
+		int botR = 15 + ((180 - 15) * bgFlash) / 255;
+		int botG = 5 + ((100 - 5) * bgFlash) / 255;
+		int botB = 35 + ((40 - 35) * bgFlash) / 255;
+
+		/* Draw gradient background as two Gouraud-shaded triangles (quad) */
+		/* This creates a smooth vertical gradient with PSX hardware dithering */
+		/* First triangle: top-left, top-right, bottom-right */
+		ptr = allocatePacket(chain, ORDERING_TABLE_SIZE - 1, 6);
+		ptr[0] = gp0_rgb(topR, topG, topB) | gp0_shadedTriangle(true, false, false);
+		ptr[1] = gp0_xy(0, 0);                    /* Top-left */
+		ptr[2] = gp0_rgb(topR, topG, topB);
+		ptr[3] = gp0_xy(SCREEN_WIDTH, 0);         /* Top-right */
+		ptr[4] = gp0_rgb(botR, botG, botB);
+		ptr[5] = gp0_xy(SCREEN_WIDTH, SCREEN_HEIGHT); /* Bottom-right */
+
+		/* Second triangle: top-left, bottom-right, bottom-left */
+		ptr = allocatePacket(chain, ORDERING_TABLE_SIZE - 1, 6);
+		ptr[0] = gp0_rgb(topR, topG, topB) | gp0_shadedTriangle(true, false, false);
+		ptr[1] = gp0_xy(0, 0);                    /* Top-left */
+		ptr[2] = gp0_rgb(botR, botG, botB);
+		ptr[3] = gp0_xy(SCREEN_WIDTH, SCREEN_HEIGHT); /* Bottom-right */
+		ptr[4] = gp0_rgb(botR, botG, botB);
+		ptr[5] = gp0_xy(0, SCREEN_HEIGHT);        /* Bottom-left */
+
+		/* Draw stars as flat shaded rectangles (right to left scrolling) */
+		for (int i = 0; i < NUM_STARS; i++) {
+			/* Culling - skip if off screen */
+			if (stars[i].x < 0 || stars[i].x >= SCREEN_WIDTH ||
+			    stars[i].y < 0 || stars[i].y >= SCREEN_HEIGHT)
+				continue;
+
+			/* Draw star */
+			ptr = allocatePacket(chain, ORDERING_TABLE_SIZE - 2, 3);
+			ptr[0] = gp0_rgb(stars[i].brightness, stars[i].brightness, stars[i].brightness) | gp0_rectangle(false, false, false);
+			ptr[1] = gp0_xy(stars[i].x, stars[i].y);
+			ptr[2] = gp0_xy(stars[i].size, stars[i].size);
+		}
 
 		/* Set drawing area attributes */
 		ptr    = allocatePacket(chain, ORDERING_TABLE_SIZE - 1, 4);
