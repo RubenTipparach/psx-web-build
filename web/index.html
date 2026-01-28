@@ -27,18 +27,148 @@
             color: #888;
             font-size: 14px;
         }
+        #control-toggle {
+            margin-top: 10px;
+            padding: 8px 16px;
+            background: #00d4ff;
+            color: #1a1a2e;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+        }
+        #control-toggle:hover {
+            background: #00b8e6;
+        }
     </style>
 </head>
 <body>
     <h1>PSX Lander - Bare Metal</h1>
     <div id="game"></div>
-    <p class="info">Built with ps1-bare-metal SDK - Using EmulatorJS HLE BIOS</p>
+    <p class="info">Built with ps1-bare-metal SDK</p>
+    <button id="control-toggle">Mode: Analog Stick</button>
+    <p id="gamepad-status" class="info" style="color: #ff6b6b;">Gamepad: Not detected - Press any button on your controller</p>
     <script>
         window.EJS_player = '#game';
-        window.EJS_core = 'psx';
-        window.EJS_gameUrl = 'rom/lander.exe?v=' + Date.now();
+        window.EJS_core = 'psx';  // pcsx_rearmed with HLE BIOS
+        // Use .bin disc image for better compatibility
+        window.EJS_gameUrl = 'rom/lander.bin?v=' + Date.now();
         window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
         window.EJS_startOnLoaded = true;
+        window.EJS_DEBUG_XX = true;
+        window.EJS_volume = 1.0;  // Enable sound at full volume
+
+        // Map analog left stick to D-pad (swap value2 between indices 4-7 and 16-19)
+        window.EJS_defaultControls = {
+            0: {
+                0: { 'value': 'x', 'value2': 'BUTTON_2' },
+                1: { 'value': 's', 'value2': 'BUTTON_4' },
+                2: { 'value': 'v', 'value2': 'SELECT' },
+                3: { 'value': 'enter', 'value2': 'START' },
+                4: { 'value': 'up arrow', 'value2': 'LEFT_STICK_Y:-1' },    // D-pad Up = Analog Up
+                5: { 'value': 'down arrow', 'value2': 'LEFT_STICK_Y:+1' },  // D-pad Down = Analog Down
+                6: { 'value': 'left arrow', 'value2': 'LEFT_STICK_X:-1' },  // D-pad Left = Analog Left
+                7: { 'value': 'right arrow', 'value2': 'LEFT_STICK_X:+1' }, // D-pad Right = Analog Right
+                8: { 'value': 'z', 'value2': 'BUTTON_1' },
+                9: { 'value': 'a', 'value2': 'BUTTON_3' },
+                10: { 'value': 'q', 'value2': 'LEFT_TOP_SHOULDER' },
+                11: { 'value': 'e', 'value2': 'RIGHT_TOP_SHOULDER' },
+                12: { 'value': 'tab', 'value2': 'LEFT_BOTTOM_SHOULDER' },
+                13: { 'value': 'r', 'value2': 'RIGHT_BOTTOM_SHOULDER' },
+                14: { 'value': '', 'value2': 'LEFT_STICK' },
+                15: { 'value': '', 'value2': 'RIGHT_STICK' },
+                16: { 'value': 'h', 'value2': 'DPAD_RIGHT' },  // Stick Right slot = Physical D-pad Right
+                17: { 'value': 'f', 'value2': 'DPAD_LEFT' },   // Stick Left slot = Physical D-pad Left
+                18: { 'value': 'g', 'value2': 'DPAD_DOWN' },   // Stick Down slot = Physical D-pad Down
+                19: { 'value': 't', 'value2': 'DPAD_UP' },     // Stick Up slot = Physical D-pad Up
+                20: { 'value': 'l', 'value2': 'RIGHT_STICK_X:+1' },
+                21: { 'value': 'j', 'value2': 'RIGHT_STICK_X:-1' },
+                22: { 'value': 'k', 'value2': 'RIGHT_STICK_Y:+1' },
+                23: { 'value': 'i', 'value2': 'RIGHT_STICK_Y:-1' },
+                24: { 'value': '1' },
+                25: { 'value': '2' },
+                26: { 'value': '3' },
+                27: { 'value': 'add' },
+                28: { 'value': 'space' },
+                29: { 'value': 'subtract' }
+            },
+            1: {},
+            2: {},
+            3: {}
+        };
+
+        // Track current mode: true = analog stick, false = d-pad
+        let useAnalogStick = true;
+
+        window.EJS_onGameStart = function() {
+            console.log('EmulatorJS: Game started - Analog stick mapped to D-pad');
+
+            // Set up toggle button
+            document.getElementById('control-toggle').addEventListener('click', toggleControlMode);
+        };
+
+        function toggleControlMode() {
+            useAnalogStick = !useAnalogStick;
+            const btn = document.getElementById('control-toggle');
+
+            // Access EmulatorJS control settings
+            const settings = EJS_emulator.controls;
+            if (!settings) {
+                console.error('Could not access EmulatorJS controls');
+                return;
+            }
+
+            if (useAnalogStick) {
+                // Analog stick mode: indices 4-7 use LEFT_STICK, 16-19 use DPAD
+                settings[0][4].value2 = 'LEFT_STICK_Y:-1';
+                settings[0][5].value2 = 'LEFT_STICK_Y:+1';
+                settings[0][6].value2 = 'LEFT_STICK_X:-1';
+                settings[0][7].value2 = 'LEFT_STICK_X:+1';
+                settings[0][16].value2 = 'DPAD_RIGHT';
+                settings[0][17].value2 = 'DPAD_LEFT';
+                settings[0][18].value2 = 'DPAD_DOWN';
+                settings[0][19].value2 = 'DPAD_UP';
+                btn.textContent = 'Mode: Analog Stick';
+            } else {
+                // D-pad mode: indices 4-7 use DPAD, 16-19 use LEFT_STICK
+                settings[0][4].value2 = 'DPAD_UP';
+                settings[0][5].value2 = 'DPAD_DOWN';
+                settings[0][6].value2 = 'DPAD_LEFT';
+                settings[0][7].value2 = 'DPAD_RIGHT';
+                settings[0][16].value2 = 'LEFT_STICK_X:+1';
+                settings[0][17].value2 = 'LEFT_STICK_X:-1';
+                settings[0][18].value2 = 'LEFT_STICK_Y:+1';
+                settings[0][19].value2 = 'LEFT_STICK_Y:-1';
+                btn.textContent = 'Mode: D-Pad';
+            }
+
+            // Save the updated controls
+            EJS_emulator.saveSettings();
+            console.log('Control mode:', useAnalogStick ? 'Analog Stick' : 'D-Pad');
+        }
+
+        // Gamepad detection helper
+        window.addEventListener('gamepadconnected', function(e) {
+            document.getElementById('gamepad-status').textContent = 'Gamepad: ' + e.gamepad.id;
+            document.getElementById('gamepad-status').style.color = '#4ecdc4';
+            console.log('Gamepad connected:', e.gamepad.id, 'Index:', e.gamepad.index);
+        });
+        window.addEventListener('gamepaddisconnected', function(e) {
+            document.getElementById('gamepad-status').textContent = 'Gamepad: Disconnected';
+            document.getElementById('gamepad-status').style.color = '#ff6b6b';
+            console.log('Gamepad disconnected:', e.gamepad.id);
+        });
+        // Check for already-connected gamepads
+        setInterval(function() {
+            var gamepads = navigator.getGamepads();
+            for (var i = 0; i < gamepads.length; i++) {
+                if (gamepads[i]) {
+                    document.getElementById('gamepad-status').textContent = 'Gamepad: ' + gamepads[i].id;
+                    document.getElementById('gamepad-status').style.color = '#4ecdc4';
+                    return;
+                }
+            }
+        }, 1000);
     </script>
     <script src="https://cdn.emulatorjs.org/stable/data/loader.js"></script>
 </body>

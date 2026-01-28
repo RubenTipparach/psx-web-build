@@ -51,15 +51,14 @@ if errorlevel 1 (
 echo.
 
 REM ========================================
-REM Step 4: Setup Web Directory
+REM Step 4: Build Disc Image
 REM ========================================
-echo [3/4] Setting up EmulatorJS...
-
-if not exist %WEB_DIR% mkdir %WEB_DIR%
-if not exist %WEB_DIR%\rom mkdir %WEB_DIR%\rom
-
-REM Copy the PSEXE file
-copy /Y build\lander.psexe %WEB_DIR%\rom\lander.exe >nul
+echo [3/4] Building disc image...
+python tools\build_iso.py
+if errorlevel 1 (
+    echo ERROR: Disc image creation failed!
+    exit /b 1
+)
 
 echo [4/4] Done!
 echo.

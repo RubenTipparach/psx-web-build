@@ -2,7 +2,12 @@
 build/
 
 # Python virtual environment
+env/
 sdk/env/
+
+# Downloaded tools (installed by install.bat)
+tools/psxavenc/
+tools/mkpsxiso/
 
 # Node modules
 web/node_modules/
@@ -24,3 +29,4 @@ Thumbs.db
 # CMake
 CMakeUserPresets.json
 .history/
+nul
