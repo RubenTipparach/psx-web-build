@@ -14,6 +14,9 @@ extern "C" {
 /* Initialize the SPU hardware */
 void setupSPU(void);
 
+/* Unmute SPU - call after upload is complete */
+void spuUnmute(void);
+
 /* Upload VAG audio data to SPU RAM and return the SPU address */
 uint32_t uploadVAG(const void *data, size_t size);
 

@@ -49,7 +49,27 @@
       "Bash(cmd /c:*)",
       "Bash(python tools/build_iso.py:*)",
       "Bash(/c/Users/santi/repos/psx-web-build/tools/psxavenc/psxavenc.exe:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(\"tools/psxavenc/psxavenc.exe\" --help)",
+      "Bash(\"tools/psxavenc/psxavenc.exe\" -h)",
+      "Bash(\"tools/psxavenc/psxavenc.exe\")",
+      "Bash(\"tools/psxavenc/psxavenc.exe\" -t xa -h)",
+      "Bash(\"tools/psxavenc/psxavenc.exe\" -t spu -h)",
+      "Bash(\"tools/psxavenc/psxavenc.exe\" -t spui -h)",
+      "Bash(c:Userssantirepospsx-web-buildtoolspsxavencpsxavenc.exe --help)",
+      "Bash(\"./tools/psxavenc/psxavenc.exe\" --help)",
+      "Bash(\"./tools/psxavenc/psxavenc.exe\" -t xa -h)",
+      "Bash(ffprobe:*)",
+      "Bash(\"c:/Users/santi/repos/psx-web-build/tools/mkpsxiso/mkpsxiso.exe\" --help)",
+      "Bash(\"c:/Users/santi/repos/psx-web-build/web/rom/PSX Snake Alpha Source Code and Assets/Source Code and Assets/Source Code/mkpsxiso/mkpsxiso.exe\")",
+      "Bash(c:/Users/santi/repos/psx-web-build/tools/psxavenc/psxavenc.exe:*)",
+      "WebFetch(domain:psx-spx.consoledev.net)",
+      "Bash(git clone:*)",
+      "Bash(git submodule update:*)",
+      "Bash(\"/c/Users/santi/repos/psx-web-build/web/rom/PSX Snake Alpha Source Code and Assets/Source Code and Assets/Source Code/mkpsxiso/mkpsxiso.exe\" --version)",
+      "Bash(git submodule:*)",
+      "Bash(git rm:*)",
+      "Bash(git add:*)"
     ]
   }
 }

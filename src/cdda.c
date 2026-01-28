@@ -1,210 +1,287 @@
 /*
  * CD-DA Audio Playback for PS1 bare-metal
- * Plays audio tracks directly from the disc
+ * Rewritten to match PSX Snake game's Audio.c approach exactly
  */
 
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include "cdda.h"
+#include "ps1/registers.h"
 
-/* CD-ROM registers */
-#define CDROM_REG0 (*(volatile uint8_t *)0x1F801800)  /* Index/Status */
-#define CDROM_REG1 (*(volatile uint8_t *)0x1F801801)  /* Command/Response */
-#define CDROM_REG2 (*(volatile uint8_t *)0x1F801802)  /* Parameter/Data */
-#define CDROM_REG3 (*(volatile uint8_t *)0x1F801803)  /* Request/IRQ */
+/* CD-ROM commands - matching Snake's CdlXxx defines */
+#define CdlNop       0x01
+#define CdlSetloc    0x02
+#define CdlPlay      0x03
+#define CdlStop      0x08
+#define CdlPause     0x09
+#define CdlInit      0x0A
+#define CdlDemute    0x0C
+#define CdlSetmode   0x0E
+#define CdlGetTN     0x13
+#define CdlGetTD     0x14
 
-/* SPU registers for CD audio volume */
-#define SPU_CD_VOL_L   (*(volatile uint16_t *)0x1F801DB0)  /* CD audio volume left */
-#define SPU_CD_VOL_R   (*(volatile uint16_t *)0x1F801DB2)  /* CD audio volume right */
-#define SPU_MAIN_VOL_L (*(volatile uint16_t *)0x1F801D80)  /* Main volume left */
-#define SPU_MAIN_VOL_R (*(volatile uint16_t *)0x1F801D82)  /* Main volume right */
-#define SPU_CTRL       (*(volatile uint16_t *)0x1F801DAA)  /* SPU control */
-#define SPU_STAT       (*(volatile uint16_t *)0x1F801DAE)  /* SPU status */
+/* Mode flags - matching Snake's CdlModeXxx */
+#define CdlModeDA    0x01  /* CD-DA playback mode */
+#define CdlModeRept  0x04  /* Report mode (sends play position) */
 
-/* CD-ROM commands */
-#define CD_CMD_GETSTAT   0x01  /* Get status */
-#define CD_CMD_SETLOC    0x02  /* Set location (MSF) */
-#define CD_CMD_PLAY      0x03  /* Play CD-DA */
-#define CD_CMD_STOP      0x08  /* Stop */
-#define CD_CMD_PAUSE     0x09  /* Pause */
-#define CD_CMD_INIT      0x0A  /* Initialize */
-#define CD_CMD_DEMUTE    0x0C  /* Demute (enable CD audio output) */
-#define CD_CMD_SETMODE   0x0E  /* Set mode */
+/* Status flags */
+#define CdlStatPlay  0x80  /* Currently playing audio */
 
-/* Status bits */
-#define CDROM_STAT_BUSY  (1 << 7)  /* Command busy */
+/* Track position storage - like Snake's CdlLOC loc[100] */
+typedef struct {
+	uint8_t minute;
+	uint8_t second;
+	uint8_t sector;
+	uint8_t track;
+} CdlLOC;
+
+static CdlLOC loc[100];
+static int ntoc = 0;
+
+/* Looping control - matching Snake exactly */
+static int loopMusic = 0;
+static int trackToLoop = 2;
+static int loopWait = 0;
+static int currentTrack = 0;
+
+/* Result buffer for CD commands */
+static uint8_t result[8];
 
 /* Small delay for CD-ROM operations */
 static void cdDelay(void) {
-    for (volatile int i = 0; i < 10000; i++)
-        __asm__ volatile("");
+	for (volatile int i = 0; i < 10000; i++)
+		__asm__ volatile("");
 }
 
 /* Long delay for init operations */
 static void cdLongDelay(void) {
-    for (volatile int i = 0; i < 100000; i++)
-        __asm__ volatile("");
+	for (volatile int i = 0; i < 100000; i++)
+		__asm__ volatile("");
 }
 
-/* Wait for CD-ROM to be ready */
+/* Wait for CD-ROM controller to be ready */
 static void waitCDReady(void) {
-    int timeout = 100000;
-    while ((CDROM_REG0 & CDROM_STAT_BUSY) && timeout > 0) {
-        timeout--;
-        __asm__ volatile("");
-    }
+	while (CDROM_HSTS & CDROM_HSTS_BUSYSTS)
+		__asm__ volatile("");
 }
 
-/* Wait for response with timeout */
-static int waitForResponse(void) {
-    int timeout = 100000;
+/* Wait for response and read result bytes */
+static int waitForResponse(uint8_t *res, int maxBytes) {
+	int timeout = 100000;
 
-    /* Wait for interrupt flag (index 1, reg3 bit 0-2) */
-    CDROM_REG0 = 1;
-    while (!(CDROM_REG3 & 0x07) && timeout > 0) {
-        timeout--;
-        __asm__ volatile("");
-    }
+	/* Switch to bank 1 for interrupt status */
+	CDROM_ADDRESS = 1;
 
-    if (timeout == 0) {
-        return -1;
-    }
+	while (!(CDROM_HINTSTS & CDROM_HINT_INT_BITMASK) && timeout > 0) {
+		timeout--;
+		__asm__ volatile("");
+	}
 
-    /* Read interrupt type */
-    int intType = CDROM_REG3 & 0x07;
+	int intType = CDROM_HINTSTS & CDROM_HINT_INT_BITMASK;
 
-    /* Acknowledge interrupt */
-    CDROM_REG3 = 0x07;
-    cdDelay();
+	/* Read response bytes */
+	CDROM_ADDRESS = 1;
+	int count = 0;
+	while ((CDROM_HSTS & CDROM_HSTS_RSLRRDY) && count < maxBytes) {
+		if (res) res[count] = CDROM_RESULT;
+		else { volatile uint8_t dummy = CDROM_RESULT; (void)dummy; }
+		count++;
+	}
+	/* Discard any remaining */
+	while (CDROM_HSTS & CDROM_HSTS_RSLRRDY) {
+		volatile uint8_t dummy = CDROM_RESULT;
+		(void)dummy;
+	}
 
-    /* Clear parameter FIFO */
-    CDROM_REG0 = 0;
-    CDROM_REG3 = 0x40;
+	/* Acknowledge interrupt */
+	CDROM_ADDRESS = 1;
+	CDROM_HCLRCTL = CDROM_HCLRCTL_CLRINT_BITMASK;
+	cdDelay();
 
-    return intType;
+	return intType;
+}
+
+/* Send command with no parameters */
+static void CdControl0(uint8_t cmd) {
+	waitCDReady();
+	CDROM_ADDRESS = 0;
+	CDROM_COMMAND = cmd;
+	cdDelay();
+}
+
+/* Send command with parameters (like Snake's CdControl) */
+static void CdControl(uint8_t cmd, uint8_t *param, int paramCount) {
+	waitCDReady();
+	CDROM_ADDRESS = 0;
+	for (int i = 0; i < paramCount; i++) {
+		CDROM_PARAMETER = param[i];
+	}
+	CDROM_COMMAND = cmd;
+	cdDelay();
+}
+
+/* Get TOC - like Snake's CdGetToc(loc) */
+static int CdGetToc(CdlLOC *locArray) {
+	uint8_t res[8];
+
+	/* GetTN - get first and last track numbers */
+	CdControl0(CdlGetTN);
+	waitForResponse(res, 8);
+
+	int firstTrack = ((res[1] >> 4) * 10) + (res[1] & 0x0F);
+	int lastTrack = ((res[2] >> 4) * 10) + (res[2] & 0x0F);
+
+	printf("CDDA: TOC has tracks %d to %d\n", firstTrack, lastTrack);
+
+	/* GetTD for each track */
+	for (int t = 1; t <= lastTrack && t < 100; t++) {
+		uint8_t trackBCD = ((t / 10) << 4) | (t % 10);
+		uint8_t param[1] = { trackBCD };
+		CdControl(CdlGetTD, param, 1);
+		waitForResponse(res, 8);
+
+		/* Result: stat, mm (BCD), ss (BCD) */
+		locArray[t].minute = res[1];
+		locArray[t].second = res[2];
+		locArray[t].sector = 0;
+		locArray[t].track = trackBCD;
+
+		printf("CDDA: Track %d at %02X:%02X:00\n", t, res[1], res[2]);
+	}
+
+	return lastTrack;
+}
+
+/* Set CD mix volume - like Snake's cdSetVol macro */
+static void cdSetVol(int vol) {
+	/* Set SPU CD audio volume */
+	SPU_AVOLL = vol;
+	SPU_AVOLR = vol;
 }
 
 void initCDDA(void) {
-    printf("CDDA: Initializing...\n");
+	printf("CDDA: Initializing (Snake-style)...\n");
 
-    /* Enable SPU and set CD audio volume */
-    SPU_CTRL = 0x8000;  /* SPU enable, unmute */
-    cdDelay();
-    SPU_MAIN_VOL_L = 0x3FFF;  /* Max main volume */
-    SPU_MAIN_VOL_R = 0x3FFF;
-    SPU_CD_VOL_L = 0x7FFF;    /* Max CD volume */
-    SPU_CD_VOL_R = 0x7FFF;
-    printf("CDDA: SPU volumes set\n");
+	/* Set up SPU for CD audio - like Snake's audio_init */
+	SPU_CTRL = SPU_CTRL_ENABLE | SPU_CTRL_DAC_ENABLE | SPU_CTRL_I2SA_ENABLE;
+	cdDelay();
 
-    /* Reset controller state */
-    CDROM_REG0 = 1;
-    CDROM_REG3 = 0x07;  /* Acknowledge any pending interrupts */
-    cdDelay();
+	/* Set master volume */
+	SPU_MVOLL = 0x3FFF;
+	SPU_MVOLR = 0x3FFF;
 
-    CDROM_REG0 = 0;
-    CDROM_REG3 = 0x40;  /* Clear parameter FIFO */
-    cdDelay();
+	/* Set CD audio volume */
+	cdSetVol(0x7FFF);
 
-    /* Send Init command */
-    waitCDReady();
-    CDROM_REG0 = 0;
-    CDROM_REG1 = CD_CMD_INIT;
-    cdLongDelay();
-    waitForResponse();
-    cdLongDelay();
-    waitForResponse();  /* Init sends two responses */
+	printf("CDDA: SPU configured\n");
 
-    printf("CDDA: Init done\n");
+	/* Clear any pending interrupts */
+	CDROM_ADDRESS = 1;
+	CDROM_HCLRCTL = CDROM_HCLRCTL_CLRINT_BITMASK | CDROM_HCLRCTL_CLRPRM;
+	cdDelay();
 
-    /* Get initial status */
-    waitCDReady();
-    CDROM_REG0 = 0;
-    CDROM_REG1 = CD_CMD_GETSTAT;
-    cdDelay();
-    waitForResponse();
+	/* Initialize CD-ROM */
+	CdControl0(CdlInit);
+	waitForResponse(result, 8);
+	cdLongDelay();
+	waitForResponse(result, 8);  /* Init sends two responses */
+	printf("CDDA: CD-ROM initialized\n");
 
-    /* Set mode: bit 0 = CDDA, bit 7 = speed (0 = normal) */
-    waitCDReady();
-    CDROM_REG0 = 0;
-    CDROM_REG2 = 0x00;  /* Normal mode */
-    CDROM_REG1 = CD_CMD_SETMODE;
-    cdDelay();
-    waitForResponse();
+	/* Get TOC - like Snake's CdGetToc(loc) */
+	ntoc = CdGetToc(loc);
 
-    printf("CDDA: Mode set\n");
+	/* Set mode for CD-DA with report - exactly like Snake */
+	/* param[0] = CdlModeRept|CdlModeDA */
+	uint8_t modeParam[1] = { CdlModeRept | CdlModeDA };
+	CdControl(CdlSetmode, modeParam, 1);
+	waitForResponse(result, 8);
+	printf("CDDA: Mode set (CdlModeRept|CdlModeDA = 0x%02X)\n", modeParam[0]);
 
-    /* Demute CD audio output */
-    waitCDReady();
-    CDROM_REG0 = 0;
-    CDROM_REG1 = CD_CMD_DEMUTE;
-    cdDelay();
-    waitForResponse();
+	/* Demute - like Snake does implicitly */
+	CdControl0(CdlDemute);
+	waitForResponse(result, 8);
+	printf("CDDA: Demuted\n");
 
-    printf("CDDA: Demuted\n");
+	printf("CDDA: Ready! Playing track 2...\n");
+
+	/* Start playing track 2 - exactly like Snake's cdMusicInit */
+	/* Snake does: CdControl(CdlPlay, (u_char *)&loc[3], 0); */
+	/* The loc structure contains: minute, second, sector, track */
+	/* We pass it as parameters to SetLoc then Play */
+
+	/* For track 2 (first audio track), use loc[2] */
+	uint8_t setlocParam[3] = { loc[2].minute, loc[2].second, loc[2].sector };
+	printf("CDDA: SetLoc to %02X:%02X:%02X (track 2 from TOC)\n",
+	       setlocParam[0], setlocParam[1], setlocParam[2]);
+	CdControl(CdlSetloc, setlocParam, 3);
+	waitForResponse(result, 8);
+
+	/* Play - with no parameter, plays from SetLoc position */
+	CdControl0(CdlPlay);
+	waitForResponse(result, 8);
+
+	trackToLoop = 2;
+	loopMusic = 1;
+	currentTrack = 2;
+
+	printf("CDDA: Play command sent!\n");
 }
 
 void playCDDATrack(int track) {
-    (void)track;  /* We'll use explicit MSF position instead */
-    printf("CDDA: Playing audio track\n");
+	if (track < 1 || track >= ntoc) {
+		printf("CDDA: Invalid track %d (have %d tracks)\n", track, ntoc);
+		return;
+	}
 
-    /* Stop any current playback first */
-    waitCDReady();
-    CDROM_REG0 = 0;
-    CDROM_REG1 = CD_CMD_STOP;
-    cdDelay();
-    waitForResponse();
-    cdLongDelay();
+	printf("CDDA: Playing track %d at %02X:%02X:%02X\n",
+	       track, loc[track].minute, loc[track].second, loc[track].sector);
 
-    /* Clear parameter FIFO */
-    waitCDReady();
-    CDROM_REG0 = 0;
-    CDROM_REG3 = 0x40;
-    cdDelay();
+	/* SetLoc to track position */
+	uint8_t setlocParam[3] = { loc[track].minute, loc[track].second, loc[track].sector };
+	CdControl(CdlSetloc, setlocParam, 3);
+	waitForResponse(result, 8);
 
-    /* SetLoc to audio track start position */
-    /* From cue file: Track 2 INDEX 01 is at 00:02:43 */
-    /* Parameters are in BCD format: MM, SS, FF */
-    /* BCD: 2 min = 0x02, 43 sec = 0x43, 0 frames = 0x00 */
-    waitCDReady();
-    CDROM_REG0 = 0;
-    CDROM_REG2 = 0x02;  /* Minutes: 02 in BCD */
-    CDROM_REG2 = 0x45;  /* Seconds: 45 in BCD (slightly after 02:43) */
-    CDROM_REG2 = 0x00;  /* Frames: 00 in BCD */
-    CDROM_REG1 = CD_CMD_SETLOC;
-    cdDelay();
+	/* Play */
+	CdControl0(CdlPlay);
+	waitForResponse(result, 8);
 
-    int resp = waitForResponse();
-    printf("CDDA: SetLoc response: %d\n", resp);
-
-    /* Now Play from the set location (no parameter = play from SetLoc position) */
-    waitCDReady();
-    CDROM_REG0 = 0;
-    CDROM_REG1 = CD_CMD_PLAY;
-    cdDelay();
-
-    resp = waitForResponse();
-    printf("CDDA: Play response: %d\n", resp);
+	currentTrack = track;
+	trackToLoop = track;
+	loopMusic = 1;
 }
 
 void stopCDDA(void) {
-    waitCDReady();
-    CDROM_REG0 = 0;
-    CDROM_REG1 = CD_CMD_STOP;
-    cdDelay();
-    waitForResponse();
+	printf("CDDA: Stopping\n");
+	CdControl0(CdlStop);
+	waitForResponse(result, 8);
+	loopMusic = 0;
+}
+
+void pauseCDDA(void) {
+	printf("CDDA: Pausing\n");
+	CdControl0(CdlPause);
+	waitForResponse(result, 8);
 }
 
 bool isCDDAPlaying(void) {
-    waitCDReady();
-    CDROM_REG0 = 0;
-    CDROM_REG1 = CD_CMD_GETSTAT;
-    cdDelay();
-    waitForResponse();
+	CdControl0(CdlNop);
+	waitForResponse(result, 8);
+	return (result[0] & CdlStatPlay) != 0;
+}
 
-    CDROM_REG0 = 1;
-    uint8_t stat = CDROM_REG1;
+/* Update function - like Snake's cdMusicUpdate */
+void updateCDDA(void) {
+	/* Check for CD reports when in report mode */
+	/* This would handle looping like Snake does */
 
-    /* Bit 7 = playing */
-    return (stat & 0x80) != 0;
+	/* For now, simplified - just check if we need to restart */
+	if (loopMusic && !isCDDAPlaying()) {
+		loopWait++;
+		/* Wait a few frames before restarting - Snake waits 5 */
+		if (loopWait >= 5) {
+			loopWait = 0;
+			playCDDATrack(trackToLoop);
+		}
+	}
 }

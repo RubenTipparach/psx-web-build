@@ -18,7 +18,13 @@ void playCDDATrack(int track);
 /* Stop CD-DA playback */
 void stopCDDA(void);
 
+/* Pause CD-DA playback */
+void pauseCDDA(void);
+
 /* Check if CD-DA is currently playing */
 bool isCDDAPlaying(void);
+
+/* Call periodically to handle looping */
+void updateCDDA(void);
 
 #endif /* CDDA_H */

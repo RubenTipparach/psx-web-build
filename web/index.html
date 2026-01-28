@@ -51,11 +51,15 @@
     <script>
         window.EJS_player = '#game';
         window.EJS_core = 'psx';  // pcsx_rearmed with HLE BIOS
-        // Use .bin disc image for better compatibility
+        // Load bin directly - XA audio is embedded in data track
         window.EJS_gameUrl = 'rom/lander.bin?v=' + Date.now();
         window.EJS_pathtodata = 'https://cdn.emulatorjs.org/stable/data/';
         window.EJS_startOnLoaded = true;
+        // Use OpenBIOS for better hardware compatibility (vs HLE BIOS)
+        window.EJS_biosUrl = 'bios/openbios.bin';
         window.EJS_DEBUG_XX = true;
+        window.EJS_debug = true;  // Enable core debug logging
+        window.EJS_Logging = true;  // Enable logging
         window.EJS_volume = 1.0;  // Enable sound at full volume
 
         // Map analog left stick to D-pad (swap value2 between indices 4-7 and 16-19)

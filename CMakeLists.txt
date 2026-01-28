@@ -54,11 +54,20 @@ convertImage(
 	lander/fontPalette.dat
 )
 
-# Convert audio from WAV to SPU-ADPCM format (10-second guitar clip)
-convertAudioSample(
-	assets/guitar_10s.wav
-	22050
-	"${PROJECT_BINARY_DIR}/lander/audioData.spu"
+# Convert music WAV to SPU-ADPCM format for embedding
+# Using 22050 Hz mono - short loop to fit in executable RAM
+# -L sets loop end flag so SPU loops back to start address
+add_custom_command(
+	OUTPUT "${PROJECT_BINARY_DIR}/lander/musicData.spu"
+	DEPENDS "${PROJECT_SOURCE_DIR}/assets/guitar_10s.wav"
+	COMMAND
+		"${PSXAVENC_PATH}"
+		"-t" "spu"
+		"-f" "22050"
+		"-L"
+		"${PROJECT_SOURCE_DIR}/assets/guitar_10s.wav"
+		"${PROJECT_BINARY_DIR}/lander/musicData.spu"
+	VERBATIM
 )
 
 # Convert 3D model from OBJ to binary format
@@ -78,6 +87,7 @@ addPS1Executable(
 	lander
 	src/gpu.c
 	src/spu.c
+	src/bios.c
 	src/model.c
 	src/font.c
 	src/main.c
@@ -94,5 +104,6 @@ addBinaryFileWithSize(lander modelData modelData_size "${PROJECT_BINARY_DIR}/lan
 addBinaryFile(lander fontTexture "${PROJECT_BINARY_DIR}/lander/fontTexture.dat")
 addBinaryFile(lander fontPalette "${PROJECT_BINARY_DIR}/lander/fontPalette.dat")
 
-# Embed audio data into executable
-addBinaryFileWithSize(lander audioData audioData_size "${PROJECT_BINARY_DIR}/lander/audioData.spu")
+# Embed music data into executable (SPU-ADPCM format)
+addBinaryFileWithSize(lander musicData musicData_size "${PROJECT_BINARY_DIR}/lander/musicData.spu")
+

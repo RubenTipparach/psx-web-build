@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include "gpu.h"
 #include "spu.h"
+#include "bios.h"
 #include "model.h"
 #include "font.h"
 #include "ps1/cop0.h"
@@ -27,9 +28,10 @@ extern const uint32_t modelData_size;
 extern const uint8_t fontTexture[];
 extern const uint8_t fontPalette[];
 
-/* Audio data embedded by CMake */
-extern const uint8_t audioData[];
-extern const uint32_t audioData_size;
+/* Music data embedded by CMake (SPU-ADPCM format) */
+extern const uint8_t musicData[];
+extern const uint32_t musicData_size;
+
 
 /* Font dimensions */
 #define FONT_WIDTH        96
@@ -356,16 +358,22 @@ int main(int argc, const char **argv) {
 	}
 	printf("Model loaded: %d verts, %d faces\n", model.numVertices, model.numFaces);
 
-	/* Initialize SPU audio playback */
+	/* Initialize SPU FIRST (matches psyqo order - SPU::reset before BIOS events) */
 	setupSPU();
 	puts("SPU initialized");
 
-	/* Upload audio to SPU RAM and play */
-	printf("Audio data size: %lu bytes\n", (unsigned long)audioData_size);
-	uint32_t audioAddr = uploadVAG(audioData, audioData_size);
-	printf("Audio uploaded to SPU RAM at 0x%08lX\n", (unsigned long)audioAddr);
-	playSample(0, audioAddr, 22050, 0x3FFF);  /* Channel 0, 22050Hz (matches conversion), max volume */
-	puts("Audio playback started");
+	/* Initialize BIOS events for HLE compatibility (required for EmulatorJS) */
+	/* This sets up DMA event handlers that HLE BIOS needs */
+	biosInit();
+	puts("BIOS events initialized");
+
+	/* Upload and play music (SPU-ADPCM format) */
+	if (musicData_size > 0) {
+		uint32_t musicAddr = uploadVAG(musicData, musicData_size);
+		spuUnmute();  /* Unmute after upload (psyqo order) */
+		playSample(0, musicAddr, 22050, 0x3FFF);  /* Channel 0, 22kHz, max volume */
+		puts("Music started on SPU");
+	}
 
 	/* Double buffering */
 	DMAChain dmaChains[2];

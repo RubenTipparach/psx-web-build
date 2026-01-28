@@ -30,3 +30,6 @@ Thumbs.db
 CMakeUserPresets.json
 .history/
 nul
+psyqo/
+psbw/
+sdk/

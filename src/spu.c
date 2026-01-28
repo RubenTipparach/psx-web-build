@@ -1,5 +1,6 @@
 /*
- * SPU helper functions for PS1 bare-metal
+ * SPU helper functions - matching PSn00bSDK libpsxspu EXACTLY
+ * Source: https://github.com/Lameguy64/PSn00bSDK/blob/master/libpsn00b/psxspu/common.c
  */
 
 #include <stdint.h>
@@ -8,148 +9,241 @@
 #include "spu.h"
 #include "ps1/registers.h"
 
-/* SPU RAM starts at 0x1000 (first 4KB reserved for capture buffers) */
-#define SPU_RAM_START 0x1000
-#define SPU_RAM_END   0x80000  /* 512KB total SPU RAM */
+/* SPU RAM layout - matching PSn00bSDK */
+#define WRITABLE_AREA_ADDR  0x200   /* 0x1000 >> 3 = 0x200 in 8-byte units */
+#define SPU_RAM_START       0x1010  /* After dummy block */
 
-/* Current position in SPU RAM for uploads */
 static uint32_t spuRamPos = SPU_RAM_START;
+static int transferMode = 0;  /* 0 = DMA, 1 = manual */
+static uint32_t transferAddr = WRITABLE_AREA_ADDR;
 
-/* Small delay for SPU operations */
-static void spuDelay(void) {
-	for (volatile int i = 0; i < 100; i++)
-		__asm__ volatile("");
+/* Dummy looping ADPCM block - required for SPU init */
+static const uint16_t dummyBlock[8] = {
+	0x0500, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
+};
+
+/* Wait for SPU status - matching PSn00bSDK _wait_status() */
+static void waitStatus(uint16_t mask, uint16_t value) {
+	int timeout = 100000;
+	while (((SPU_STAT & mask) != value) && --timeout > 0);
 }
 
+/* Manual write to SPU RAM - matching PSn00bSDK _manual_write() */
+static size_t manualWrite(const uint16_t *data, size_t size) {
+	/* Set transfer address */
+	SPU_TSA = transferAddr;
+
+	/* Set manual write mode */
+	uint16_t ctrl = SPU_CTRL & ~0x0030;
+	ctrl |= 0x0010;  /* Manual write */
+	SPU_CTRL = ctrl;
+	waitStatus(0x0030, 0x0010);
+
+	/* Write data */
+	size_t words = (size + 1) / 2;
+	for (size_t i = 0; i < words; i++) {
+		SPU_DATA = data[i];
+	}
+
+	/* Wait for completion */
+	waitStatus(0x0400, 0x0000);
+
+	/* Update transfer address */
+	transferAddr += words;
+
+	return words;
+}
+
+/* DMA transfer - matching PSn00bSDK _dma_transfer() */
+static size_t dmaTransfer(uint32_t *data, size_t size, int write) {
+	/* Calculate BCR */
+	size_t length = size / 4;
+	length = (length + 3) / 4;  /* Round up to 4-word chunks */
+
+	/* Set transfer address */
+	SPU_TSA = transferAddr;
+
+	/* Set DMA write mode */
+	uint16_t ctrl = SPU_CTRL & ~0x0030;
+	ctrl |= 0x0020;  /* DMA write */
+	SPU_CTRL = ctrl;
+	waitStatus(0x0030, 0x0020);
+
+	/* Configure DMA */
+	DMA_MADR(DMA_SPU) = (uint32_t)data;
+	DMA_BCR(DMA_SPU) = 4 | (length << 16);
+	DMA_CHCR(DMA_SPU) = 0x01000201;  /* Start transfer */
+
+	/* Wait for DMA completion */
+	int timeout = 100000;
+	while ((DMA_CHCR(DMA_SPU) & 0x01000000) && --timeout > 0);
+
+	/* Update transfer address */
+	transferAddr += length * 4;
+
+	return length * 4;
+}
+
+/*
+ * SpuInit - EXACT copy from PSn00bSDK
+ */
 void setupSPU(void) {
-	/* Enable DMA channel 4 (SPU) */
-	DMA_DPCR |= DMA_DPCR_CH_ENABLE(DMA_SPU);
+	printf("SPU: Init (PSn00bSDK)...\n");
 
-	/* Reset SPU */
-	SPU_CTRL = 0;
-	spuDelay();
+	/* CRITICAL: Set SPU bus timing - this is what makes it work! */
+	BIU_DEV4_CTRL = 0x200931e1;
 
-	/* Wait for SPU to be ready (with timeout for HLE BIOS compatibility) */
-	for (int timeout = 10000; timeout > 0 && (SPU_STAT & SPU_STAT_BUSY); timeout--)
-		__asm__ volatile("");
+	/* Disable SPU and wait */
+	SPU_CTRL = 0x0000;
+	waitStatus(0x001f, 0x0000);
 
-	/* Turn off all channels first */
-	SPU_KOFF0 = 0xFFFF;
-	SPU_KOFF1 = 0x00FF;
-	spuDelay();
-
-	/* Set master volume (max is 0x3FFF) */
-	SPU_MVOLL = 0x3FFF;
-	SPU_MVOLR = 0x3FFF;
-
-	/* Clear CD audio volume (not using CD audio) */
-	SPU_AVOLL = 0;
-	SPU_AVOLR = 0;
-
-	/* Clear reverb volume */
+	/* Clear all volumes */
+	SPU_MVOLL = 0;
+	SPU_MVOLR = 0;
 	SPU_EVOLL = 0;
 	SPU_EVOLR = 0;
 
-	/* Enable SPU with DAC and unmute - use full control word */
-	/* Bit 15: SPU enable, Bit 14: unmute/DAC enable */
-	SPU_CTRL = SPU_CTRL_ENABLE | SPU_CTRL_DAC_ENABLE;
-	spuDelay();
+	/* Key off all voices */
+	SPU_KOFF0 = 0xffff;
+	SPU_KOFF1 = 0x00ff;
 
-	/* Wait for SPU to stabilize */
-	for (volatile int i = 0; i < 1000; i++)
-		__asm__ volatile("");
-}
+	/* Disable modulation, noise, reverb */
+	SPU_PMON0 = 0;
+	SPU_PMON1 = 0;
+	SPU_NON0 = 0;
+	SPU_NON1 = 0;
+	SPU_EON0 = 0;
+	SPU_EON1 = 0;
 
-uint32_t uploadVAG(const void *data, size_t size) {
-	const uint8_t *src = (const uint8_t *)data;
+	/* Set reverb address to end of RAM */
+	SPU_ESA = 0xfffe;
 
-	/* psxavenc -t spu outputs raw SPU-ADPCM data (no VAG header) */
+	/* Clear CD and external volumes */
+	SPU_AVOLL = 0;
+	SPU_AVOLR = 0;
+	SPU_BVOLL = 0;
+	SPU_BVOLR = 0;
 
-	/* Cap size to available SPU RAM */
-	size_t maxSize = SPU_RAM_END - spuRamPos;
-	if (size > maxSize) {
-		size = maxSize;
+	/* Enable SPU DMA channel */
+	DMA_DPCR |= DMA_DPCR_CH_PRIORITY(DMA_SPU, 3) | DMA_DPCR_CH_ENABLE(DMA_SPU);
+	DMA_CHCR(DMA_SPU) = 0x00000201;
+
+	/* Reset transfer control */
+	SPU_FIFO_CTRL = 0x0004;
+
+	/* Enable SPU with CD audio - NOTE: 0xc001 not 0xc000! */
+	SPU_CTRL = 0xc001;
+	waitStatus(0x003f, 0x0001);
+
+	/* Upload dummy block to start of writable SPU RAM */
+	transferAddr = WRITABLE_AREA_ADDR;
+	manualWrite(dummyBlock, sizeof(dummyBlock));
+
+	/* Initialize all 24 voices to play dummy block */
+	for (int i = 0; i < 24; i++) {
+		SPU_CH_VOLL(i) = 0;
+		SPU_CH_VOLR(i) = 0;
+		SPU_CH_PITCH(i) = 0x1000;  /* 44100 Hz */
+		SPU_CH_SSA(i) = WRITABLE_AREA_ADDR;
 	}
 
-	/* Align size to 64 bytes (SPU DMA requirement) */
-	size_t alignedSize = (size + 63) & ~63;
+	/* Key on ALL voices (playing silent dummy) */
+	SPU_KON0 = 0xffff;
+	SPU_KON1 = 0x00ff;
 
-	/* Store the starting address */
-	uint32_t spuAddr = spuRamPos;
+	/* Set master volume */
+	SPU_MVOLL = 0x3fff;
+	SPU_MVOLR = 0x3fff;
 
-	/* Set transfer address (in 8-byte units) */
-	SPU_TSA = spuAddr >> 3;
+	/* Set CD audio volume */
+	SPU_AVOLL = 0x7fff;
+	SPU_AVOLR = 0x7fff;
 
-	/* Enable DMA write mode */
-	SPU_CTRL = (SPU_CTRL & ~SPU_CTRL_XFER_BITMASK) | SPU_CTRL_XFER_DMA_WRITE;
-	spuDelay();
-
-	/* Wait for SPU to be ready (with timeout) */
-	for (int t = 0; t < 10000 && !(SPU_STAT & SPU_STAT_DREQ); t++)
-		__asm__ volatile("");
-
-	/* Set up DMA transfer */
-	DMA_MADR(DMA_SPU) = (uint32_t)src;
-	DMA_BCR(DMA_SPU) = ((alignedSize / 64) << 16) | 16;  /* 16 words per block */
-	DMA_CHCR(DMA_SPU) = DMA_CHCR_WRITE | DMA_CHCR_MODE_SLICE | DMA_CHCR_ENABLE;
-
-	/* Wait for DMA to complete (with generous timeout for emulators) */
-	for (int t = 0; t < 1000000 && (DMA_CHCR(DMA_SPU) & DMA_CHCR_ENABLE); t++)
-		__asm__ volatile("");
-
-	/* Reset transfer mode */
-	SPU_CTRL = (SPU_CTRL & ~SPU_CTRL_XFER_BITMASK) | SPU_CTRL_XFER_NONE;
-	spuDelay();
-
-	/* Update RAM position for next upload */
-	spuRamPos += alignedSize;
-
-	return spuAddr;
+	printf("SPU: Ready, CTRL=0x%04X STAT=0x%04X\n", SPU_CTRL, SPU_STAT);
 }
 
+void spuUnmute(void) {
+	/* Already enabled in setupSPU */
+}
+
+/*
+ * SpuSetTransferStartAddr
+ */
+static uint32_t spuSetTransferStartAddr(uint32_t addr) {
+	transferAddr = addr >> 3;
+	return addr;
+}
+
+/*
+ * SpuWrite - matching PSn00bSDK
+ */
+uint32_t uploadVAG(const void *data, size_t size) {
+	uint32_t addr = spuRamPos;
+
+	printf("SPU: Upload %u bytes to 0x%05lX\n", (unsigned)size, (unsigned long)addr);
+
+	/* Set transfer address */
+	spuSetTransferStartAddr(addr);
+
+	/* Use DMA transfer (mode 0) */
+	dmaTransfer((uint32_t *)data, size, 1);
+
+	/* Wait for completion */
+	waitStatus(0x0400, 0x0000);
+
+	/* Update allocation pointer */
+	spuRamPos = addr + ((size + 63) & ~63);
+
+	printf("SPU: Done\n");
+	return addr;
+}
+
+/*
+ * Play sample - matching PSn00bSDK voice setup
+ */
 void playSample(int channel, uint32_t spuAddr, int sampleRate, int volume) {
-	/* Calculate pitch: pitch = (sampleRate * 4096) / 44100 */
 	int pitch = (sampleRate * 4096) / 44100;
 	if (pitch > 0x3FFF) pitch = 0x3FFF;
-
-	/* Clamp volume */
+	if (pitch < 1) pitch = 1;
 	if (volume > 0x3FFF) volume = 0x3FFF;
 
-	printf("SPU: Playing ch%d addr=0x%04X pitch=%d vol=%d\n",
-		channel, (unsigned)(spuAddr >> 3), pitch, volume);
+	printf("SPU: Play ch%d addr=0x%04lX\n", channel, (unsigned long)(spuAddr >> 3));
 
-	/* Set channel parameters */
+	/* Key off first */
+	if (channel < 16) {
+		SPU_KOFF0 = (1 << channel);
+	} else {
+		SPU_KOFF1 = (1 << (channel - 16));
+	}
+
+	/* Small delay after key off */
+	for (volatile int i = 0; i < 100; i++);
+
+	/* Set voice parameters - matching Snake's ADSR settings exactly */
+	/* ADSR1: Am=0(linear), AR=0(instant), DR=0(instant), SL=F(max sustain) = 0x000F */
+	/* ADSR2: Sm=0, Sd=0, SR=0, Rm=0, RR=0 = 0x0000 */
 	SPU_CH_VOLL(channel) = volume;
 	SPU_CH_VOLR(channel) = volume;
 	SPU_CH_PITCH(channel) = pitch;
-	SPU_CH_SSA(channel) = spuAddr >> 3;  /* Start address in 8-byte units */
-	SPU_CH_LSAX(channel) = spuAddr >> 3; /* Loop address = start (for looping samples) */
+	SPU_CH_SSA(channel) = spuAddr >> 3;
+	SPU_CH_ADSR1(channel) = 0x000f;  /* SL=F, DR=0, AR=0 (instant on, sustain at max) */
+	SPU_CH_ADSR2(channel) = 0x0000;  /* No release */
 
-	/* Set ADSR for sustained playback:
-	 * ADSR1: Sustain level = 15 (max), Decay = 0, Attack = fastest
-	 * ADSR2: Sustain holds, Release = slowest */
-	SPU_CH_ADSR1(channel) = 0x00FF;  /* Attack max, Decay 0, Sustain 15 */
-	SPU_CH_ADSR2(channel) = 0x0000;  /* Sustain mode, no release */
+	/* Small delay before key on */
+	for (volatile int i = 0; i < 100; i++);
 
-	/* Trigger the channel (key on) */
-	printf("SPU: Triggering channel %d\n", channel);
+	/* Key on */
 	if (channel < 16) {
-		SPU_KON0 = 1 << channel;
+		SPU_KON0 = (1 << channel);
 	} else {
-		SPU_KON1 = 1 << (channel - 16);
+		SPU_KON1 = (1 << (channel - 16));
 	}
-
-	/* Small delay after key on */
-	for (volatile int i = 0; i < 100; i++)
-		__asm__ volatile("");
-
-	printf("SPU: Channel triggered, CTRL=0x%04X STAT=0x%04X\n", SPU_CTRL, SPU_STAT);
 }
 
 void stopChannel(int channel) {
 	if (channel < 16) {
-		SPU_KOFF0 = 1 << channel;
+		SPU_KOFF0 = (1 << channel);
 	} else {
-		SPU_KOFF1 = 1 << (channel - 16);
+		SPU_KOFF1 = (1 << (channel - 16));
 	}
 }
