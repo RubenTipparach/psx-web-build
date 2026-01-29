@@ -73,7 +73,7 @@ extern const uint32_t musicData_size;
 #define CENTERY (SCREEN_HEIGHT / 2)
 
 /* Starfield configuration - scrolling right to left */
-#define NUM_STARS 120
+#define NUM_STARS 80
 
 /* Star structure - 2D scrolling with parallax layers */
 typedef struct {
@@ -83,8 +83,25 @@ typedef struct {
 	uint8_t size;
 } Star;
 
-/* Global starfield */
+/* 3D Shape types */
+#define SHAPE_CUBE     0
+#define SHAPE_PYRAMID  1
+#define SHAPE_SPHERE   2  /* Low-poly octahedron */
+#define NUM_SHAPES 6
+
+/* 3D Shape structure */
+typedef struct {
+	int16_t x, y, z;
+	int16_t rotX, rotY, rotZ;
+	int16_t rotSpeedX, rotSpeedY, rotSpeedZ;
+	int16_t moveSpeed;
+	uint8_t type;
+	uint8_t r, g, b;  /* Base color */
+} Shape3D;
+
+/* Global starfield and shapes */
 static Star stars[NUM_STARS];
+static Shape3D shapes[NUM_SHAPES];
 
 /* Simple pseudo-random number generator */
 static uint32_t randSeed = 12345;
@@ -97,34 +114,73 @@ static uint32_t fastRand(void) {
 static void resetStar(Star *star, bool randomX) {
 	star->x = randomX ? (int16_t)(fastRand() % SCREEN_WIDTH) : SCREEN_WIDTH + (fastRand() % 20);
 	star->y = (int16_t)(fastRand() % SCREEN_HEIGHT);
-	/* Create parallax effect - 3 layers */
 	int layer = fastRand() % 3;
 	if (layer == 0) {
-		/* Far layer - dim and slow */
 		star->brightness = 60 + (fastRand() % 40);
 		star->speed = 1;
 		star->size = 1;
 	} else if (layer == 1) {
-		/* Mid layer */
 		star->brightness = 120 + (fastRand() % 60);
 		star->speed = 2;
 		star->size = 1;
 	} else {
-		/* Near layer - bright and fast */
 		star->brightness = 200 + (fastRand() % 55);
 		star->speed = 3 + (fastRand() % 2);
 		star->size = 2;
 	}
 }
 
-/* Initialize starfield with random positions */
+/* Calculate screen X position from world coordinates */
+/* screenX = (worldX * focalLength) / worldZ + CENTERX */
+/* focalLength = SCREEN_WIDTH/2 = 160 */
+static int getScreenX(int worldX, int worldZ) {
+	if (worldZ <= 0) return SCREEN_WIDTH + 100;  /* Off-screen if behind camera */
+	return (worldX * (SCREEN_WIDTH / 2)) / worldZ + CENTERX;
+}
+
+/* Initialize a 3D shape - spawns off-screen to the right */
+static void resetShape(Shape3D *shape, bool randomX) {
+	shape->z = 350 + (fastRand() % 250);  /* Set Z first since X depends on it */
+	shape->y = (int16_t)((fastRand() % 180) - 90);
+	if (randomX) {
+		/* Initial spawn: random position across screen */
+		shape->x = (int16_t)((fastRand() % 600) - 150);
+	} else {
+		/* Respawn: start off-screen right. Need worldX > worldZ to be off right edge */
+		/* Add some margin so shape is fully off-screen */
+		shape->x = shape->z + 50 + (fastRand() % 100);
+	}
+	shape->rotX = fastRand() % 4096;
+	shape->rotY = fastRand() % 4096;
+	shape->rotZ = fastRand() % 4096;
+	shape->rotSpeedX = (fastRand() % 40) - 20;
+	shape->rotSpeedY = (fastRand() % 50) - 25;
+	shape->rotSpeedZ = (fastRand() % 30) - 15;
+	shape->moveSpeed = 2 + (fastRand() % 3);
+	shape->type = fastRand() % 3;
+	/* Vibrant colors */
+	int colorType = fastRand() % 6;
+	switch (colorType) {
+		case 0: shape->r = 255; shape->g = 80;  shape->b = 80;  break;  /* Red */
+		case 1: shape->r = 80;  shape->g = 255; shape->b = 80;  break;  /* Green */
+		case 2: shape->r = 80;  shape->g = 80;  shape->b = 255; break;  /* Blue */
+		case 3: shape->r = 255; shape->g = 255; shape->b = 80;  break;  /* Yellow */
+		case 4: shape->r = 255; shape->g = 80;  shape->b = 255; break;  /* Magenta */
+		default: shape->r = 80; shape->g = 255; shape->b = 255; break;  /* Cyan */
+	}
+}
+
+/* Initialize starfield and shapes */
 static void initStarfield(void) {
 	for (int i = 0; i < NUM_STARS; i++) {
 		resetStar(&stars[i], true);
 	}
+	for (int i = 0; i < NUM_SHAPES; i++) {
+		resetShape(&shapes[i], true);
+	}
 }
 
-/* Update starfield - move stars right to left */
+/* Update starfield and shapes */
 static void updateStarfield(void) {
 	for (int i = 0; i < NUM_STARS; i++) {
 		stars[i].x -= stars[i].speed;
@@ -132,6 +188,39 @@ static void updateStarfield(void) {
 			resetStar(&stars[i], false);
 		}
 	}
+	for (int i = 0; i < NUM_SHAPES; i++) {
+		shapes[i].x -= shapes[i].moveSpeed;
+		shapes[i].rotX += shapes[i].rotSpeedX;
+		shapes[i].rotY += shapes[i].rotSpeedY;
+		shapes[i].rotZ += shapes[i].rotSpeedZ;
+		/* Check screen-space position - reset when fully off-screen left */
+		/* Shape size on screen is roughly (20 * 160) / z pixels */
+		int screenX = getScreenX(shapes[i].x, shapes[i].z);
+		int screenSize = (20 * (SCREEN_WIDTH / 2)) / shapes[i].z;
+		if (screenX < -screenSize) {
+			resetShape(&shapes[i], false);
+		}
+	}
+}
+
+/* Draw a single flat-shaded triangle for background shapes */
+/* Uses depth index to sort: higher zIdx = drawn first (further back) */
+/* Background shapes should use indices from ORDERING_TABLE_SIZE/2 to ORDERING_TABLE_SIZE-3 */
+static void drawBgTriangle(DMAChain *chain, uint8_t r, uint8_t g, uint8_t b, int zIdx) {
+	/* Clamp zIdx to background range (behind main model, in front of stars) */
+	/* Main model uses indices 0 to ~ORDERING_TABLE_SIZE/2 */
+	/* Background shapes use ORDERING_TABLE_SIZE/2 to ORDERING_TABLE_SIZE-3 */
+	int minIdx = ORDERING_TABLE_SIZE / 2;
+	int maxIdx = ORDERING_TABLE_SIZE - 3;
+
+	if (zIdx < minIdx) zIdx = minIdx;
+	if (zIdx > maxIdx) zIdx = maxIdx;
+
+	uint32_t *ptr = allocatePacket(chain, zIdx, 4);
+	ptr[0] = gp0_rgb(r, g, b) | gp0_triangle(false, false);
+	gte_storeDataReg(GTE_SXY0, 1 * 4, ptr);
+	gte_storeDataReg(GTE_SXY1, 2 * 4, ptr);
+	gte_storeDataReg(GTE_SXY2, 3 * 4, ptr);
 }
 
 /* Initialize the GTE for 3D rendering */
@@ -685,16 +774,178 @@ int main(int argc, const char **argv) {
 
 		/* Draw stars as flat shaded rectangles (right to left scrolling) */
 		for (int i = 0; i < NUM_STARS; i++) {
-			/* Culling - skip if off screen */
 			if (stars[i].x < 0 || stars[i].x >= SCREEN_WIDTH ||
 			    stars[i].y < 0 || stars[i].y >= SCREEN_HEIGHT)
 				continue;
-
-			/* Draw star */
 			ptr = allocatePacket(chain, ORDERING_TABLE_SIZE - 2, 3);
 			ptr[0] = gp0_rgb(stars[i].brightness, stars[i].brightness, stars[i].brightness) | gp0_rectangle(false, false, false);
 			ptr[1] = gp0_xy(stars[i].x, stars[i].y);
 			ptr[2] = gp0_xy(stars[i].size, stars[i].size);
+		}
+
+		/* Draw 3D shapes in background */
+		/* Shapes should appear BEHIND the main model (which is at z=300) */
+		/* We use ordering table indices: higher = drawn first (further back) */
+		for (int s = 0; s < NUM_SHAPES; s++) {
+			Shape3D *sh = &shapes[s];
+
+			/* Only cull if completely behind camera */
+			if (sh->z < 50) continue;
+
+			/* Set up GTE for this shape */
+			gte_setControlReg(GTE_TRX, sh->x);
+			gte_setControlReg(GTE_TRY, sh->y);
+			gte_setControlReg(GTE_TRZ, sh->z);
+			gte_setRotationMatrix(ONE, 0, 0, 0, ONE, 0, 0, 0, ONE);
+			rotateCurrentMatrix(sh->rotY, sh->rotX, sh->rotZ);
+
+			int sz = 20;  /* Shape size */
+			GTEVector16 v[8];  /* Vertex buffer */
+
+			if (sh->type == SHAPE_CUBE) {
+				/* Cube vertices */
+				v[0] = (GTEVector16){-sz, -sz, -sz};  /* Back bottom left */
+				v[1] = (GTEVector16){ sz, -sz, -sz};  /* Back bottom right */
+				v[2] = (GTEVector16){ sz,  sz, -sz};  /* Back top right */
+				v[3] = (GTEVector16){-sz,  sz, -sz};  /* Back top left */
+				v[4] = (GTEVector16){-sz, -sz,  sz};  /* Front bottom left */
+				v[5] = (GTEVector16){ sz, -sz,  sz};  /* Front bottom right */
+				v[6] = (GTEVector16){ sz,  sz,  sz};  /* Front top right */
+				v[7] = (GTEVector16){-sz,  sz,  sz};  /* Front top left */
+
+				/* 6 faces, 2 triangles each - different brightness per face */
+				int faces[6][4] = {
+					{4, 5, 6, 7},  /* Front */
+					{1, 0, 3, 2},  /* Back */
+					{0, 4, 7, 3},  /* Left */
+					{5, 1, 2, 6},  /* Right */
+					{7, 6, 2, 3},  /* Top */
+					{0, 1, 5, 4},  /* Bottom */
+				};
+				int bright[6] = {100, 60, 80, 80, 100, 50};
+
+				for (int f = 0; f < 6; f++) {
+					int br = bright[f];
+					uint8_t fr = (sh->r * br) / 100;
+					uint8_t fg = (sh->g * br) / 100;
+					uint8_t fb = (sh->b * br) / 100;
+
+					/* First triangle of quad */
+					gte_loadV0(&v[faces[f][0]]);
+					gte_loadV1(&v[faces[f][1]]);
+					gte_loadV2(&v[faces[f][2]]);
+					gte_command(GTE_CMD_RTPT | GTE_SF);
+					gte_command(GTE_CMD_NCLIP);
+					if (gte_getDataReg(GTE_MAC0) > 0) {
+						gte_command(GTE_CMD_AVSZ3 | GTE_SF);
+						int zIdx = gte_getDataReg(GTE_OTZ);
+						drawBgTriangle(chain, fr, fg, fb, zIdx);
+					}
+
+					/* Second triangle of quad */
+					gte_loadV0(&v[faces[f][0]]);
+					gte_loadV1(&v[faces[f][2]]);
+					gte_loadV2(&v[faces[f][3]]);
+					gte_command(GTE_CMD_RTPT | GTE_SF);
+					gte_command(GTE_CMD_NCLIP);
+					if (gte_getDataReg(GTE_MAC0) > 0) {
+						gte_command(GTE_CMD_AVSZ3 | GTE_SF);
+						int zIdx = gte_getDataReg(GTE_OTZ);
+						drawBgTriangle(chain, fr, fg, fb, zIdx);
+					}
+				}
+			}
+			else if (sh->type == SHAPE_PYRAMID) {
+				/* Pyramid: apex at top, square base */
+				GTEVector16 apex = {0, -sz, 0};
+				v[0] = (GTEVector16){-sz, sz, -sz};  /* Base back left */
+				v[1] = (GTEVector16){ sz, sz, -sz};  /* Base back right */
+				v[2] = (GTEVector16){ sz, sz,  sz};  /* Base front right */
+				v[3] = (GTEVector16){-sz, sz,  sz};  /* Base front left */
+
+				/* 4 side faces */
+				int sideFaces[4][2] = {{3, 2}, {2, 1}, {1, 0}, {0, 3}};
+				int sideBright[4] = {100, 80, 60, 80};
+
+				for (int f = 0; f < 4; f++) {
+					int br = sideBright[f];
+					uint8_t fr = (sh->r * br) / 100;
+					uint8_t fg = (sh->g * br) / 100;
+					uint8_t fb = (sh->b * br) / 100;
+
+					gte_loadV0(&apex);
+					gte_loadV1(&v[sideFaces[f][0]]);
+					gte_loadV2(&v[sideFaces[f][1]]);
+					gte_command(GTE_CMD_RTPT | GTE_SF);
+					gte_command(GTE_CMD_NCLIP);
+					if (gte_getDataReg(GTE_MAC0) > 0) {
+						gte_command(GTE_CMD_AVSZ3 | GTE_SF);
+						int zIdx = gte_getDataReg(GTE_OTZ);
+						drawBgTriangle(chain, fr, fg, fb, zIdx);
+					}
+				}
+
+				/* Base (2 triangles) */
+				uint8_t baseBr = (sh->r * 40) / 100;
+				uint8_t baseBg = (sh->g * 40) / 100;
+				uint8_t baseBb = (sh->b * 40) / 100;
+
+				gte_loadV0(&v[0]);
+				gte_loadV1(&v[1]);
+				gte_loadV2(&v[2]);
+				gte_command(GTE_CMD_RTPT | GTE_SF);
+				gte_command(GTE_CMD_NCLIP);
+				if (gte_getDataReg(GTE_MAC0) > 0) {
+					gte_command(GTE_CMD_AVSZ3 | GTE_SF);
+					drawBgTriangle(chain, baseBr, baseBg, baseBb, gte_getDataReg(GTE_OTZ));
+				}
+
+				gte_loadV0(&v[0]);
+				gte_loadV1(&v[2]);
+				gte_loadV2(&v[3]);
+				gte_command(GTE_CMD_RTPT | GTE_SF);
+				gte_command(GTE_CMD_NCLIP);
+				if (gte_getDataReg(GTE_MAC0) > 0) {
+					gte_command(GTE_CMD_AVSZ3 | GTE_SF);
+					drawBgTriangle(chain, baseBr, baseBg, baseBb, gte_getDataReg(GTE_OTZ));
+				}
+			}
+			else { /* SHAPE_SPHERE - Octahedron (8 faces) */
+				/* 6 vertices: top, bottom, front, back, left, right */
+				GTEVector16 top   = {0, -sz, 0};
+				GTEVector16 bot   = {0,  sz, 0};
+				GTEVector16 front = {0, 0,  sz};
+				GTEVector16 back  = {0, 0, -sz};
+				GTEVector16 left  = {-sz, 0, 0};
+				GTEVector16 right = { sz, 0, 0};
+
+				/* 8 triangular faces */
+				GTEVector16 *octaFaces[8][3] = {
+					{&top, &front, &right}, {&top, &right, &back},
+					{&top, &back, &left},   {&top, &left, &front},
+					{&bot, &right, &front}, {&bot, &back, &right},
+					{&bot, &left, &back},   {&bot, &front, &left},
+				};
+				int octaBright[8] = {100, 80, 60, 80, 90, 70, 50, 70};
+
+				for (int f = 0; f < 8; f++) {
+					int br = octaBright[f];
+					uint8_t fr = (sh->r * br) / 100;
+					uint8_t fg = (sh->g * br) / 100;
+					uint8_t fb = (sh->b * br) / 100;
+
+					gte_loadV0(octaFaces[f][0]);
+					gte_loadV1(octaFaces[f][1]);
+					gte_loadV2(octaFaces[f][2]);
+					gte_command(GTE_CMD_RTPT | GTE_SF);
+					gte_command(GTE_CMD_NCLIP);
+					if (gte_getDataReg(GTE_MAC0) > 0) {
+						gte_command(GTE_CMD_AVSZ3 | GTE_SF);
+						int zIdx = gte_getDataReg(GTE_OTZ);
+						drawBgTriangle(chain, fr, fg, fb, zIdx);
+					}
+				}
+			}
 		}
 
 		/* Set drawing area attributes */
