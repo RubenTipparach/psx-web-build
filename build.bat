@@ -15,6 +15,23 @@ echo ========================================
 echo.
 
 REM ========================================
+REM Step 0: Set up PATH with local tools
+REM ========================================
+if exist "tools\mips\bin\mipsel-none-elf-gcc.exe" (
+    set "PATH=%CD%\tools\mips\bin;%PATH%"
+) else (
+    echo ERROR: MIPS toolchain not found. Please run install.bat first.
+    exit /b 1
+)
+
+if exist "tools\ninja\ninja.exe" (
+    set "PATH=%CD%\tools\ninja;%PATH%"
+) else (
+    echo ERROR: Ninja not found. Please run install.bat first.
+    exit /b 1
+)
+
+REM ========================================
 REM Step 1: Check Python venv exists
 REM ========================================
 if not exist "%SDK_PATH%\env" (

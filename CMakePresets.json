@@ -13,7 +13,8 @@
 			"binaryDir": "${sourceDir}/build",
 			"cacheVariables": {
 				"CMAKE_BUILD_TYPE": "Debug",
-				"VENV_PATH": "${sourceDir}/sdk/env"
+				"VENV_PATH": "${sourceDir}/sdk/env",
+				"CMAKE_MAKE_PROGRAM": "${sourceDir}/tools/ninja/ninja.exe"
 			}
 		},
 		{
@@ -23,7 +24,8 @@
 			"binaryDir": "${sourceDir}/build",
 			"cacheVariables": {
 				"CMAKE_BUILD_TYPE": "Release",
-				"VENV_PATH": "${sourceDir}/sdk/env"
+				"VENV_PATH": "${sourceDir}/sdk/env",
+				"CMAKE_MAKE_PROGRAM": "${sourceDir}/tools/ninja/ninja.exe"
 			}
 		}
 	]

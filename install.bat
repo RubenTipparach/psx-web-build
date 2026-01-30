@@ -15,16 +15,6 @@ if errorlevel 1 (
 )
 echo   CMake: OK
 
-REM Check for GCC cross-compiler
-where mipsel-none-elf-gcc >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: mipsel-none-elf-gcc not found in PATH
-    echo Please install the MIPS cross-compiler toolchain.
-    echo See: https://github.com/grumpycoders/pcsx-redux/tree/main/tools/gcc-mipsel
-    exit /b 1
-)
-echo   GCC Cross-compiler: OK
-
 REM Check for Python
 where python >nul 2>&1
 if errorlevel 1 (
@@ -36,16 +26,82 @@ echo   Python: OK
 
 echo.
 
-echo [1/5] Initializing submodules...
-git submodule update --init --recursive
-if errorlevel 1 (
-    echo ERROR: Failed to initialize submodules
-    exit /b 1
+echo [1/6] Installing MIPS cross-compiler...
+if not exist "tools\mips" mkdir tools\mips
+
+REM Check if already installed
+if exist "tools\mips\bin\mipsel-none-elf-gcc.exe" (
+    echo MIPS toolchain already installed, skipping...
+) else (
+    echo Downloading MIPS toolchain ^(this may take a while, ~150MB^)...
+    curl -L -o tools\mips\mips-toolchain.zip "https://static.grumpycoder.net/pixel/mips/g++-mipsel-none-elf-13.1.0.zip"
+    if errorlevel 1 (
+        echo ERROR: Failed to download MIPS toolchain
+        exit /b 1
+    )
+
+    echo Extracting MIPS toolchain...
+    powershell -Command "Expand-Archive -Force -Path 'tools\mips\mips-toolchain.zip' -DestinationPath 'tools\mips'"
+    del tools\mips\mips-toolchain.zip
+
+    if not exist "tools\mips\bin\mipsel-none-elf-gcc.exe" (
+        echo ERROR: mipsel-none-elf-gcc.exe not found after extraction
+        exit /b 1
+    )
+)
+
+REM Add to PATH for this session
+set "PATH=%CD%\tools\mips\bin;%PATH%"
+echo Done.
+echo.
+
+echo [2/6] Installing Ninja build system...
+if not exist "tools\ninja" mkdir tools\ninja
+
+REM Check if ninja already exists
+if exist "tools\ninja\ninja.exe" (
+    echo Ninja already installed, skipping...
+) else (
+    echo Downloading Ninja v1.11.1...
+    curl -L -o tools\ninja\ninja-win.zip "https://github.com/ninja-build/ninja/releases/download/v1.11.1/ninja-win.zip"
+    if errorlevel 1 (
+        echo ERROR: Failed to download Ninja
+        exit /b 1
+    )
+
+    echo Extracting Ninja...
+    powershell -Command "Expand-Archive -Force -Path 'tools\ninja\ninja-win.zip' -DestinationPath 'tools\ninja'"
+    del tools\ninja\ninja-win.zip
+
+    if not exist "tools\ninja\ninja.exe" (
+        echo ERROR: ninja.exe not found after extraction
+        exit /b 1
+    )
+)
+
+REM Add to PATH for this session
+set "PATH=%CD%\tools\ninja;%PATH%"
+echo Done.
+echo.
+
+echo [3/6] Initializing SDK submodule...
+if not exist "sdk\.git" (
+    echo Cloning ps1-bare-metal SDK...
+    git clone https://github.com/spicyjpeg/ps1-bare-metal.git sdk
+    if errorlevel 1 (
+        echo ERROR: Failed to clone SDK repository
+        exit /b 1
+    )
+) else (
+    echo SDK already cloned, updating...
+    cd sdk
+    git pull
+    cd ..
 )
 echo Done.
 echo.
 
-echo [2/5] Installing psxavenc...
+echo [4/6] Installing psxavenc...
 if not exist "tools\psxavenc" mkdir tools\psxavenc
 
 REM Check if psxavenc already exists
@@ -77,7 +133,7 @@ if exist "tools\psxavenc\psxavenc.exe" (
 echo Done.
 echo.
 
-echo [3/5] Installing mkpsxiso...
+echo [5/6] Installing mkpsxiso...
 if not exist "tools\mkpsxiso" mkdir tools\mkpsxiso
 
 REM Check if mkpsxiso already exists
@@ -112,18 +168,34 @@ if exist "tools\mkpsxiso\mkpsxiso.exe" (
 echo Done.
 echo.
 
-echo [4/5] Setting up Python virtual environment...
-if not exist "env" (
+echo [6/7] Setting up Python virtual environment...
+if not exist "env\Scripts\python.exe" (
     echo Creating virtual environment...
     python -m venv env
+    if errorlevel 1 (
+        echo ERROR: Failed to create Python virtual environment
+        exit /b 1
+    )
 )
-call env\Scripts\activate.bat
-pip install pillow --quiet
+
+if not exist "env\Scripts\python.exe" (
+    echo ERROR: Python virtual environment was not created properly
+    exit /b 1
+)
+
+echo Installing Python dependencies...
+env\Scripts\python.exe -m pip install pillow --quiet
+if errorlevel 1 (
+    echo ERROR: Failed to install Python dependencies
+    exit /b 1
+)
 echo Done.
 echo.
 
-echo [5/5] Verifying installation...
+echo [7/7] Verifying installation...
 echo   SDK submodule: OK
+if exist "tools\mips\bin\mipsel-none-elf-gcc.exe" (echo   MIPS toolchain: OK) else (echo   MIPS toolchain: MISSING)
+if exist "tools\ninja\ninja.exe" (echo   Ninja: OK) else (echo   Ninja: MISSING)
 if exist "tools\psxavenc\psxavenc.exe" (echo   psxavenc: OK) else (echo   psxavenc: MISSING)
 if exist "tools\mkpsxiso\mkpsxiso.exe" (echo   mkpsxiso: OK) else (echo   mkpsxiso: MISSING)
 if exist "env\Scripts\python.exe" (echo   Python venv: OK) else (echo   Python venv: MISSING)
@@ -133,5 +205,10 @@ echo.
 echo ========================================
 echo Installation complete!
 echo.
-echo To build the project, run: build.bat
+echo To add the MIPS toolchain to your PATH permanently, run:
+echo   add_to_path.bat
+echo.
+echo Or you can start building immediately by running:
+echo   build.bat
+echo   ^(build.bat will use the local toolchain automatically^)
 echo ========================================
